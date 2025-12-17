@@ -1,5 +1,2 @@
-# Core dependency for the ADK agents
 google-adk==1.21.0
-
-# For loading environment variables from .env
 python-dotenv==1.2.1
