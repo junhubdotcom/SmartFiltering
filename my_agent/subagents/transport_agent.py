@@ -4,7 +4,7 @@ transport_agent.py
 
 Defines the TransportAgent for the smart filtering system. This agent is
 responsible for handling user requests related to vehicle rentals. It includes
-a search function that queries the mock database for transport listings and
+a search function that queries the backend API for transport listings and
 returns multiple options sorted by suitability with full details and tags.
 """
 
@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, List
 
 from google.adk.agents import LlmAgent
 
-from ..data.mock_db import get_transport_listings, Transport
+from ..data.api_client import get_transport_listings
 
 
 def search_transport_listings(
@@ -24,7 +24,7 @@ def search_transport_listings(
     min_year: Optional[int] = None,
     min_rating: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Search the mock database for transport listings.
+    """Search the backend API for transport listings.
 
     Filters the list of transport listings by optional parameters and returns
     multiple options sorted by suitability (best first), each with full details
@@ -43,79 +43,83 @@ def search_transport_listings(
         A dictionary with 'results' (list of matching options) or 'suggestions'
         (related options if no exact match).
     """
-    all_listings: List[Transport] = get_transport_listings()
-    candidates: List[Transport] = all_listings.copy()
+    # Fetch real listings from backend API
+    all_listings = get_transport_listings()
     
-    # Apply filters
-    if location:
-        candidates = [l for l in candidates if location.lower() in l.location.lower()]
-    if max_price_per_day is not None:
-        candidates = [l for l in candidates if l.basePrice <= max_price_per_day]
-    if vehicle_type:
-        candidates = [l for l in candidates if vehicle_type.lower() in l.vehicleType.lower()]
-    if make:
-        candidates = [l for l in candidates if make.lower() in l.make.lower()]
-    if model:
-        candidates = [l for l in candidates if model.lower() in l.model.lower()]
-    if min_year:
-        candidates = [l for l in candidates if l.year >= min_year]
-    if min_rating is not None:
-        candidates = [l for l in candidates if l.averageRating >= min_rating]
-    
-    if not candidates:
-        # No exact matches – return related suggestions from same category
-        suggestions_sorted = sorted(
-            all_listings,
-            key=lambda l: (-l.averageRating, l.basePrice),
-        )
-        suggestion_data = []
-        if suggestions_sorted:
-            max_rating_all = max(l.averageRating for l in all_listings)
-            min_price_all = min(l.basePrice for l in all_listings)
-            for s in suggestions_sorted:
-                tags = _generate_tags(s, max_rating_all, min_price_all, all_listings)
-                suggestion_data.append({
-                    "listingId": s.listingId,
-                    "title": s.title,
-                    "description": s.description,
-                    "location": s.location,
-                    "vehicleType": s.vehicleType,
-                    "make": s.make,
-                    "model": s.model,
-                    "year": s.year,
-                    "pricePerDay": s.basePrice,
-                    "rating": s.averageRating,
-                    "tags": tags,
-                })
+    if not all_listings:
         return {
             "matched": False,
-            "message": "No vehicles match your exact criteria. Here are related options in the transport category:",
+            "message": "No transport listings available. The backend may be unavailable or have no vehicle listings.",
+            "results": [],
+        }
+    
+    candidates = all_listings.copy()
+    
+    # Apply filters - using API response field names
+    if location:
+        candidates = [l for l in candidates if location.lower() in (l.get("address") or "").lower()]
+    if max_price_per_day is not None:
+        candidates = [l for l in candidates if float(l.get("basePrice", 0)) <= max_price_per_day]
+    if vehicle_type:
+        candidates = [l for l in candidates if vehicle_type.lower() in (l.get("vehicleType") or "").lower()]
+    if make:
+        candidates = [l for l in candidates if make.lower() in (l.get("brand") or "").lower()]
+    if model:
+        candidates = [l for l in candidates if model.lower() in (l.get("model") or "").lower()]
+    if min_year:
+        candidates = [l for l in candidates if (l.get("year") or 0) >= min_year]
+    
+    if not candidates:
+        # No exact matches – return all transport listings as suggestions
+        suggestion_data = []
+        for s in all_listings:
+            tags = _generate_tags(s, all_listings)
+            suggestion_data.append({
+                "listingId": s.get("id"),
+                "title": s.get("title"),
+                "description": s.get("description"),
+                "address": s.get("address"),
+                "vehicleType": s.get("vehicleType"),
+                "brand": s.get("brand"),
+                "model": s.get("model"),
+                "year": s.get("year"),
+                "pricePerDay": float(s.get("basePrice", 0)),
+                "transmission": s.get("transmission"),
+                "fuelType": s.get("fuelType"),
+                "seats": s.get("seats"),
+                "images": s.get("images", []),
+                "status": s.get("status"),
+                "tags": tags,
+            })
+        return {
+            "matched": False,
+            "message": "No vehicles match your exact criteria. Here are all available vehicles:",
             "suggestions": suggestion_data,
         }
     
-    # Sort candidates by suitability: highest rating first, then lowest price
-    candidates_sorted = sorted(candidates, key=lambda l: (-l.averageRating, l.basePrice))
-    
-    # Generate result data with tags
-    max_rating = max(l.averageRating for l in candidates)
-    min_price = min(l.basePrice for l in candidates)
+    # Sort candidates by price (lowest first)
+    candidates_sorted = sorted(candidates, key=lambda l: float(l.get("basePrice", 0)))
     
     results = []
     for idx, listing in enumerate(candidates_sorted):
-        tags = _generate_tags(listing, max_rating, min_price, candidates)
+        tags = _generate_tags(listing, candidates)
         if idx == 0:
             tags.insert(0, "Most Suitable")
         results.append({
-            "listingId": listing.listingId,
-            "title": listing.title,
-            "description": listing.description,
-            "location": listing.location,
-            "vehicleType": listing.vehicleType,
-            "make": listing.make,
-            "model": listing.model,
-            "year": listing.year,
-            "pricePerDay": listing.basePrice,
-            "rating": listing.averageRating,
+            "listingId": listing.get("id"),
+            "title": listing.get("title"),
+            "description": listing.get("description"),
+            "address": listing.get("address"),
+            "vehicleType": listing.get("vehicleType"),
+            "brand": listing.get("brand"),
+            "model": listing.get("model"),
+            "year": listing.get("year"),
+            "pricePerDay": float(listing.get("basePrice", 0)),
+            "transmission": listing.get("transmission"),
+            "fuelType": listing.get("fuelType"),
+            "seats": listing.get("seats"),
+            "images": listing.get("images", []),
+            "status": listing.get("status"),
             "tags": tags,
         })
     
@@ -126,44 +130,48 @@ def search_transport_listings(
     }
 
 
-def _generate_tags(listing: Transport, max_rating: float, min_price: float, pool: List[Transport]) -> List[str]:
+def _generate_tags(listing: Dict[str, Any], pool: List[Dict[str, Any]]) -> List[str]:
     """Generate descriptive tags for why this listing is suitable."""
     tags = []
     
-    # Rating-based tags
-    if listing.averageRating >= 4.9:
-        tags.append("Excellent Rating")
-    elif listing.averageRating >= 4.5:
-        tags.append("High Rating")
+    prices = [float(l.get("basePrice", 0)) for l in pool]
+    min_price = min(prices) if prices else 0
     
-    if listing.averageRating >= 0.99 * max_rating:
-        tags.append("Top Rated in Results")
+    listing_price = float(listing.get("basePrice", 0))
     
     # Price-based tags
-    if listing.basePrice <= min_price * 1.01:
+    if listing_price <= min_price * 1.01:
         tags.append("Cheapest Option")
-    elif listing.basePrice <= min_price * 1.2:
+    elif listing_price <= min_price * 1.2:
         tags.append("Budget Friendly")
     
     # Year-based tags
     current_year = 2026
-    if listing.year >= current_year - 2:
+    year = listing.get("year")
+    if year and year >= current_year - 2:
         tags.append("Recent Model")
-    elif listing.year >= current_year - 5:
+    elif year and year >= current_year - 5:
         tags.append("Well Maintained")
     
     # Vehicle type tags
-    if listing.vehicleType.lower() == "car":
+    vehicle_type = (listing.get("vehicleType") or "").lower()
+    if vehicle_type == "car":
         tags.append("Comfortable Ride")
-    elif listing.vehicleType.lower() in ["van", "suv"]:
+    elif vehicle_type in ["van", "suv"]:
         tags.append("Spacious")
-    elif listing.vehicleType.lower() in ["motorcycle", "bike"]:
+    elif vehicle_type in ["motorcycle", "bike"]:
         tags.append("Fuel Efficient")
     
-    # Value tag (high rating + reasonable price)
-    avg_price = sum(l.basePrice for l in pool) / len(pool) if pool else listing.basePrice
-    if listing.averageRating >= 4.5 and listing.basePrice <= avg_price:
-        tags.append("Great Value")
+    # Transmission tag
+    if listing.get("transmission") == "Automatic":
+        tags.append("Easy to Drive")
+    
+    # Seats tag
+    seats = listing.get("seats")
+    if seats and seats >= 7:
+        tags.append("Great for Groups")
+    elif seats and seats >= 5:
+        tags.append("Family Friendly")
     
     return tags if tags else ["Good Option"]
 
@@ -175,60 +183,36 @@ transport_agent = LlmAgent(
     instruction=(
         "You are an expert agent that helps users find the best **transport** (rental vehicle) based on their requirements.\n\n"
         
-        "**CRITICAL: ALL RESPONSES MUST BE IN JSON FORMAT**\n"
-        "You must ALWAYS respond with valid JSON. Never use plain text or markdown.\n\n"
+        "**CRITICAL: RETURN EXACT DATA FROM DATABASE**\n"
+        "When you call the search tool, you MUST return the EXACT data from the tool response.\n"
+        "DO NOT modify, reformat, or make up any values. Only the 'tags' field is generated.\n"
+        "All other fields (listingId, title, description, address, vehicleType, make, model, year, pricePerDay, \n"
+        "transmission, fuelType, seats, images, status) must be copied EXACTLY as returned by the search tool.\n\n"
         
         "**UNDERSTANDING COMPLEX REQUIREMENTS:**\n"
         "Users may provide complex requirements in natural language. You must interpret and extract:\n"
         "- **Location**: City or area (e.g., 'Kuala Lumpur', 'KL', 'Penang')\n"
         "- **Date range**: If user mentions dates like '1 Jan to 5 Jan', calculate number of days (e.g., 5 days)\n"
         "- **Total budget**: If user says 'RM500 for 5 days', calculate max_price_per_day = 500/5 = 100\n"
-        "- **Per-day budget**: If user says 'budget RM100' or 'RM100 per day', this means MAXIMUM RM100 per day (not exact). Use as max_price_per_day.\n"
+        "- **Per-day budget**: If user says 'budget RM100' or 'RM100 per day', this means MAXIMUM RM100 per day.\n"
         "- **Vehicle type**: car, motorcycle, van, SUV, bike, etc.\n"
-        "- **Make/Brand**: Toyota, Honda, BMW, etc.\n"
-        "- **Model**: Camry, City, Civic, etc.\n"
-        "- **Year requirement**: 'newer than 2018', 'recent model', '2020 or later'\n"
-        "- **Rating requirements**: 'highly rated', 'good reviews', 'at least 4.5 rating'\n\n"
-        "**IMPORTANT:** When user says 'budget RM100', it means they want options that cost RM100 OR LESS, not exactly RM100.\n\n"
+        "- **Make/Brand**: Toyota, Honda, BMW, Proton, Perodua, etc.\n"
+        "- **Model**: Camry, City, Civic, Saga, Myvi, etc.\n"
+        "- **Year requirement**: 'newer than 2018', 'recent model', '2020 or later'\n\n"
         
         "**SEARCH PROCESS:**\n"
-        "1. Carefully parse the user's request to extract all parameters mentioned above.\n"
+        "1. Parse the user's request to extract parameters.\n"
         "2. Call `search_transport_listings` with the extracted parameters.\n"
-        "3. The tool returns data that you must format as JSON.\n\n"
+        "3. Return the tool's response as JSON, copying all data fields EXACTLY.\n\n"
         
         "**JSON RESPONSE FORMAT:**\n"
-        "Always respond with this exact JSON structure:\n"
         "{\n"
         "  \"type\": \"transport_results\",\n"
-        "  \"matched\": true/false,\n"
-        "  \"query\": {\n"
-        "    \"location\": \"extracted location or null\",\n"
-        "    \"maxPricePerDay\": number or null,\n"
-        "    \"vehicleType\": \"type or null\",\n"
-        "    \"make\": \"make or null\",\n"
-        "    \"numDays\": number or null\n"
-        "  },\n"
-        "  \"results\": [\n"
-        "    {\n"
-        "      \"listingId\": \"T001\",\n"
-        "      \"title\": \"Toyota Camry 2018\",\n"
-        "      \"description\": \"Description\",\n"
-        "      \"location\": \"Kuala Lumpur\",\n"
-        "      \"vehicleType\": \"car\",\n"
-        "      \"make\": \"Toyota\",\n"
-        "      \"model\": \"Camry\",\n"
-        "      \"year\": 2018,\n"
-        "      \"pricePerDay\": 80.0,\n"
-        "      \"totalPrice\": 240.0,\n"
-        "      \"rating\": 4.7,\n"
-        "      \"tags\": [\"Most Suitable\", \"High Rating\"]\n"
-        "    }\n"
-        "  ],\n"
-        "  \"message\": \"Found X vehicle(s) matching your criteria\"\n"
+        "  \"matched\": <use exact value from tool: true if results found, false otherwise>,\n"
+        "  \"query\": { <your extracted parameters> },\n"
+        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>,\n"
+        "  \"message\": <COPY EXACTLY from tool response>\n"
         "}\n\n"
-        
-        "**WHEN NO EXACT MATCHES:**\n"
-        "Set \"matched\": false and include suggestions in the \"results\" array with appropriate message.\n\n"
         
         "**DELEGATION:**\n"
         "If the user asks about accommodation or items instead of vehicles, delegate using `transfer_to_agent` "

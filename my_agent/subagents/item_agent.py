@@ -4,7 +4,7 @@ item_agent.py
 
 Defines the ItemAgent for the smart filtering system. This agent handles
 requests to rent miscellaneous items (electronics, tools, etc.). It provides a
-search function that queries the mock database for item listings and returns
+search function that queries the backend API for item listings and returns
 multiple options sorted by suitability with full details and tags.
 """
 
@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, List
 
 from google.adk.agents import LlmAgent
 
-from ..data.mock_db import get_item_listings, Item
+from ..data.api_client import get_item_listings
 
 
 def search_item_listings(
@@ -22,7 +22,7 @@ def search_item_listings(
     min_rating: Optional[float] = None,
     keyword: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search the mock database for item listings.
+    """Search the backend API for item listings.
 
     Filters the list of item listings by optional parameters and returns
     multiple options sorted by suitability (best first), each with full details
@@ -39,70 +39,74 @@ def search_item_listings(
         A dictionary with 'results' (list of matching options) or 'suggestions'
         (related options if no exact match).
     """
-    all_listings: List[Item] = get_item_listings()
-    candidates: List[Item] = all_listings.copy()
+    # Fetch real listings from backend API
+    all_listings = get_item_listings()
     
-    # Apply filters
-    if location:
-        candidates = [l for l in candidates if location.lower() in l.location.lower()]
-    if max_price_per_day is not None:
-        candidates = [l for l in candidates if l.basePrice <= max_price_per_day]
-    if item_category:
-        candidates = [l for l in candidates if item_category.lower() in l.itemCategory.lower()]
-    if min_rating is not None:
-        candidates = [l for l in candidates if l.averageRating >= min_rating]
-    if keyword:
-        keyword_lower = keyword.lower()
-        candidates = [l for l in candidates if keyword_lower in l.title.lower() or keyword_lower in l.description.lower()]
-    
-    if not candidates:
-        # No exact matches – return related suggestions from same category
-        suggestions_sorted = sorted(
-            all_listings,
-            key=lambda l: (-l.averageRating, l.basePrice),
-        )
-        suggestion_data = []
-        if suggestions_sorted:
-            max_rating_all = max(l.averageRating for l in all_listings)
-            min_price_all = min(l.basePrice for l in all_listings)
-            for s in suggestions_sorted:
-                tags = _generate_tags(s, max_rating_all, min_price_all, all_listings)
-                suggestion_data.append({
-                    "listingId": s.listingId,
-                    "title": s.title,
-                    "description": s.description,
-                    "location": s.location,
-                    "itemCategory": s.itemCategory,
-                    "pricePerDay": s.basePrice,
-                    "rating": s.averageRating,
-                    "tags": tags,
-                })
+    if not all_listings:
         return {
             "matched": False,
-            "message": "No items match your exact criteria. Here are related options in the item category:",
+            "message": "No item listings available. The backend may be unavailable or have no item listings.",
+            "results": [],
+        }
+    
+    candidates = all_listings.copy()
+    
+    # Apply filters - using API response field names
+    if location:
+        candidates = [l for l in candidates if location.lower() in (l.get("address") or "").lower()]
+    if max_price_per_day is not None:
+        candidates = [l for l in candidates if float(l.get("basePrice", 0)) <= max_price_per_day]
+    if item_category:
+        candidates = [l for l in candidates if item_category.lower() in (l.get("category") or "").lower()]
+    if keyword:
+        keyword_lower = keyword.lower()
+        candidates = [l for l in candidates if keyword_lower in (l.get("title") or "").lower() or keyword_lower in (l.get("description") or "").lower()]
+    
+    if not candidates:
+        # No exact matches – return all item listings as suggestions
+        suggestion_data = []
+        for s in all_listings:
+            tags = _generate_tags(s, all_listings)
+            suggestion_data.append({
+                "listingId": s.get("id"),
+                "title": s.get("title"),
+                "description": s.get("description"),
+                "address": s.get("address"),
+                "category": s.get("category"),
+                "brand": s.get("brand"),
+                "model": s.get("model"),
+                "condition": s.get("condition"),
+                "pricePerDay": float(s.get("basePrice", 0)),
+                "images": s.get("images", []),
+                "status": s.get("status"),
+                "tags": tags,
+            })
+        return {
+            "matched": False,
+            "message": "No items match your exact criteria. Here are all available items:",
             "suggestions": suggestion_data,
         }
     
-    # Sort candidates by suitability: highest rating first, then lowest price
-    candidates_sorted = sorted(candidates, key=lambda l: (-l.averageRating, l.basePrice))
-    
-    # Generate result data with tags
-    max_rating = max(l.averageRating for l in candidates)
-    min_price = min(l.basePrice for l in candidates)
+    # Sort candidates by price (lowest first)
+    candidates_sorted = sorted(candidates, key=lambda l: float(l.get("basePrice", 0)))
     
     results = []
     for idx, listing in enumerate(candidates_sorted):
-        tags = _generate_tags(listing, max_rating, min_price, candidates)
+        tags = _generate_tags(listing, candidates)
         if idx == 0:
             tags.insert(0, "Most Suitable")
         results.append({
-            "listingId": listing.listingId,
-            "title": listing.title,
-            "description": listing.description,
-            "location": listing.location,
-            "itemCategory": listing.itemCategory,
-            "pricePerDay": listing.basePrice,
-            "rating": listing.averageRating,
+            "listingId": listing.get("id"),
+            "title": listing.get("title"),
+            "description": listing.get("description"),
+            "address": listing.get("address"),
+            "category": listing.get("category"),
+            "brand": listing.get("brand"),
+            "model": listing.get("model"),
+            "condition": listing.get("condition"),
+            "pricePerDay": float(listing.get("basePrice", 0)),
+            "images": listing.get("images", []),
+            "status": listing.get("status"),
             "tags": tags,
         })
     
@@ -113,40 +117,44 @@ def search_item_listings(
     }
 
 
-def _generate_tags(listing: Item, max_rating: float, min_price: float, pool: List[Item]) -> List[str]:
+def _generate_tags(listing: Dict[str, Any], pool: List[Dict[str, Any]]) -> List[str]:
     """Generate descriptive tags for why this listing is suitable."""
     tags = []
     
-    # Rating-based tags
-    if listing.averageRating >= 4.9:
-        tags.append("Excellent Rating")
-    elif listing.averageRating >= 4.5:
-        tags.append("High Rating")
+    prices = [float(l.get("basePrice", 0)) for l in pool]
+    min_price = min(prices) if prices else 0
     
-    if listing.averageRating >= 0.99 * max_rating:
-        tags.append("Top Rated in Results")
+    listing_price = float(listing.get("basePrice", 0))
     
     # Price-based tags
-    if listing.basePrice <= min_price * 1.01:
+    if listing_price <= min_price * 1.01:
         tags.append("Cheapest Option")
-    elif listing.basePrice <= min_price * 1.2:
+    elif listing_price <= min_price * 1.2:
         tags.append("Budget Friendly")
     
     # Category-based tags
-    category_lower = listing.itemCategory.lower()
-    if category_lower == "electronics":
+    category = (listing.get("category") or "").lower()
+    if category == "electronics":
         tags.append("Tech Gear")
-    elif category_lower == "tools":
+    elif category == "tools":
         tags.append("DIY Essential")
-    elif category_lower == "furniture":
+    elif category == "furniture":
         tags.append("Home & Living")
-    elif category_lower == "sports":
+    elif category == "sports":
         tags.append("Active Lifestyle")
+    elif "camera" in category or "camera" in (listing.get("title") or "").lower():
+        tags.append("Photography Gear")
     
-    # Value tag (high rating + reasonable price)
-    avg_price = sum(l.basePrice for l in pool) / len(pool) if pool else listing.basePrice
-    if listing.averageRating >= 4.5 and listing.basePrice <= avg_price:
-        tags.append("Great Value")
+    # Condition tags
+    condition = (listing.get("condition") or "").lower()
+    if condition in ["new", "excellent"]:
+        tags.append("Like New")
+    elif condition == "good":
+        tags.append("Good Condition")
+    
+    # Brand tag
+    if listing.get("brand"):
+        tags.append(f"{listing.get('brand')} Brand")
     
     return tags if tags else ["Good Option"]
 
@@ -158,56 +166,34 @@ item_agent = LlmAgent(
     instruction=(
         "You are an expert agent that helps users find the best **items** to rent based on their requirements.\n\n"
         
-        "**CRITICAL: ALL RESPONSES MUST BE IN JSON FORMAT**\n"
-        "You must ALWAYS respond with valid JSON. Never use plain text or markdown.\n\n"
+        "**CRITICAL: RETURN EXACT DATA FROM DATABASE**\n"
+        "When you call the search tool, you MUST return the EXACT data from the tool response.\n"
+        "DO NOT modify, reformat, or make up any values. Only the 'tags' field is generated.\n"
+        "All other fields (listingId, title, description, address, itemCategory, brand, model, \n"
+        "condition, pricePerDay, images, status) must be copied EXACTLY as returned by the search tool.\n\n"
         
         "**UNDERSTANDING COMPLEX REQUIREMENTS:**\n"
         "Users may provide complex requirements in natural language. You must interpret and extract:\n"
         "- **Location**: City or area (e.g., 'Kuala Lumpur', 'KL', 'Penang')\n"
         "- **Date range**: If user mentions dates like '1 Jan to 3 Jan', calculate number of days (e.g., 3 days)\n"
         "- **Total budget**: If user says 'RM300 for a week', calculate max_price_per_day = 300/7 ≈ 43\n"
-        "- **Per-day budget**: If user says 'budget RM50' or 'RM50 per day', this means MAXIMUM RM50 per day (not exact). Use as max_price_per_day.\n"
+        "- **Per-day budget**: If user says 'budget RM50' or 'RM50 per day', this means MAXIMUM RM50 per day.\n"
         "- **Item category**: Electronics, Tools, Furniture, Sports, Camera, etc.\n"
-        "- **Specific item**: Extract keywords like 'camera', 'drill', 'projector', 'laptop'\n"
-        "- **Rating requirements**: 'highly rated', 'good condition', 'at least 4.5 rating'\n"
-        "- **Purpose/use case**: 'for a wedding', 'for DIY project', 'for photography'\n\n"
-        "**IMPORTANT:** When user says 'budget RM50', it means they want options that cost RM50 OR LESS, not exactly RM50.\n\n"
+        "- **Specific item**: Extract keywords like 'camera', 'drill', 'projector', 'laptop'\n\n"
         
         "**SEARCH PROCESS:**\n"
-        "1. Carefully parse the user's request to extract all parameters mentioned above.\n"
+        "1. Parse the user's request to extract parameters.\n"
         "2. Call `search_item_listings` with the extracted parameters.\n"
-        "3. The tool returns data that you must format as JSON.\n\n"
+        "3. Return the tool's response as JSON, copying all data fields EXACTLY.\n\n"
         
         "**JSON RESPONSE FORMAT:**\n"
-        "Always respond with this exact JSON structure:\n"
         "{\n"
         "  \"type\": \"item_results\",\n"
-        "  \"matched\": true/false,\n"
-        "  \"query\": {\n"
-        "    \"location\": \"extracted location or null\",\n"
-        "    \"maxPricePerDay\": number or null,\n"
-        "    \"itemCategory\": \"category or null\",\n"
-        "    \"keyword\": \"search keyword or null\",\n"
-        "    \"numDays\": number or null\n"
-        "  },\n"
-        "  \"results\": [\n"
-        "    {\n"
-        "      \"listingId\": \"I001\",\n"
-        "      \"title\": \"Canon DSLR Camera\",\n"
-        "      \"description\": \"Description\",\n"
-        "      \"location\": \"Kuala Lumpur\",\n"
-        "      \"itemCategory\": \"Electronics\",\n"
-        "      \"pricePerDay\": 60.0,\n"
-        "      \"totalPrice\": 180.0,\n"
-        "      \"rating\": 4.8,\n"
-        "      \"tags\": [\"Most Suitable\", \"High Rating\"]\n"
-        "    }\n"
-        "  ],\n"
-        "  \"message\": \"Found X item(s) matching your criteria\"\n"
+        "  \"matched\": <use exact value from tool: true if results found, false otherwise>,\n"
+        "  \"query\": { <your extracted parameters> },\n"
+        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>,\n"
+        "  \"message\": <COPY EXACTLY from tool response>\n"
         "}\n\n"
-        
-        "**WHEN NO EXACT MATCHES:**\n"
-        "Set \"matched\": false and include suggestions in the \"results\" array with appropriate message.\n\n"
         
         "**DELEGATION:**\n"
         "If the user asks about vehicles or accommodation instead of items, delegate using `transfer_to_agent` "

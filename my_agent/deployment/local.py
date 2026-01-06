@@ -57,7 +57,7 @@ def main():
     # Send a test query
     print("\nSending test query...")
     test_message = (
-        "Hello, how are you doing today? I hope you're having a wonderful day!"
+        "Hello, can you find me a Luxury Chalet in Seri Kembangan?"
     )
     print(f"Message: {test_message}")
     print("\nResponse:")
