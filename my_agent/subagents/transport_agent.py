@@ -48,7 +48,6 @@ def search_transport_listings(
     
     if not all_listings:
         return {
-            "matched": False,
             "message": "No transport listings available. The backend may be unavailable or have no vehicle listings.",
             "results": [],
         }
@@ -70,10 +69,31 @@ def search_transport_listings(
         candidates = [l for l in candidates if (l.get("year") or 0) >= min_year]
     
     if not candidates:
-        # No exact matches – return all transport listings as suggestions
+        # No exact matches – try to find similar vehicles (same type or brand)
+        similar_vehicles = []
+        
+        # First, try to find vehicles of the same type
+        if vehicle_type:
+            similar_vehicles = [l for l in all_listings if vehicle_type.lower() in (l.get("vehicleType") or "").lower()]
+        
+        # If no type matches, try same brand
+        if not similar_vehicles and make:
+            similar_vehicles = [l for l in all_listings if make.lower() in (l.get("brand") or "").lower()]
+        
+        # If still no matches, return empty with appropriate message
+        if not similar_vehicles:
+            search_term = vehicle_type or make or "requested vehicle"
+            return {
+                "message": f"No {search_term} listings available in our database.",
+                "results": [],
+            }
+        
+        # Sort similar vehicles by price
+        similar_vehicles_sorted = sorted(similar_vehicles, key=lambda l: float(l.get("basePrice", 0)))
+        
         suggestion_data = []
-        for s in all_listings:
-            tags = _generate_tags(s, all_listings)
+        for s in similar_vehicles_sorted:
+            tags = _generate_tags(s, similar_vehicles_sorted)
             suggestion_data.append({
                 "listingId": s.get("id"),
                 "title": s.get("title"),
@@ -91,10 +111,11 @@ def search_transport_listings(
                 "status": s.get("status"),
                 "tags": tags,
             })
+        
+        search_term = vehicle_type or make or "vehicle"
         return {
-            "matched": False,
-            "message": "No vehicles match your exact criteria. Here are all available vehicles:",
-            "suggestions": suggestion_data,
+            "message": f"No exact match found. Here are other {search_term} options available:",
+            "results": suggestion_data,
         }
     
     # Sort candidates by price (lowest first)
@@ -124,8 +145,7 @@ def search_transport_listings(
         })
     
     return {
-        "matched": True,
-        "message": f"Found {len(results)} vehicle(s) matching your criteria, sorted from most suitable:",
+        "message": f"Found {len(results)} vehicle(s) matching your criteria.",
         "results": results,
     }
 
@@ -208,10 +228,8 @@ transport_agent = LlmAgent(
         "**JSON RESPONSE FORMAT:**\n"
         "{\n"
         "  \"type\": \"transport_results\",\n"
-        "  \"matched\": <use exact value from tool: true if results found, false otherwise>,\n"
-        "  \"query\": { <your extracted parameters> },\n"
-        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>,\n"
-        "  \"message\": <COPY EXACTLY from tool response>\n"
+        "  \"message\": <COPY EXACTLY from tool response>,\n"
+        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>\n"
         "}\n\n"
         
         "**DELEGATION:**\n"

@@ -44,7 +44,6 @@ def search_item_listings(
     
     if not all_listings:
         return {
-            "matched": False,
             "message": "No item listings available. The backend may be unavailable or have no item listings.",
             "results": [],
         }
@@ -63,10 +62,32 @@ def search_item_listings(
         candidates = [l for l in candidates if keyword_lower in (l.get("title") or "").lower() or keyword_lower in (l.get("description") or "").lower()]
     
     if not candidates:
-        # No exact matches – return all item listings as suggestions
+        # No exact matches – try to find similar items (same category or keyword)
+        similar_items = []
+        
+        # First, try to find items matching the keyword in title/description
+        if keyword:
+            keyword_lower = keyword.lower()
+            similar_items = [l for l in all_listings if keyword_lower in (l.get("title") or "").lower() or keyword_lower in (l.get("description") or "").lower()]
+        
+        # If no keyword matches, try same category
+        if not similar_items and item_category:
+            similar_items = [l for l in all_listings if item_category.lower() in (l.get("category") or "").lower()]
+        
+        # If still no matches, return empty with appropriate message
+        if not similar_items:
+            search_term = keyword or item_category or "requested item"
+            return {
+                "message": f"No {search_term} listings available in our database.",
+                "results": [],
+            }
+        
+        # Sort similar items by price
+        similar_items_sorted = sorted(similar_items, key=lambda l: float(l.get("basePrice", 0)))
+        
         suggestion_data = []
-        for s in all_listings:
-            tags = _generate_tags(s, all_listings)
+        for s in similar_items_sorted:
+            tags = _generate_tags(s, similar_items_sorted)
             suggestion_data.append({
                 "listingId": s.get("id"),
                 "title": s.get("title"),
@@ -81,10 +102,11 @@ def search_item_listings(
                 "status": s.get("status"),
                 "tags": tags,
             })
+        
+        search_term = keyword or item_category or "item"
         return {
-            "matched": False,
-            "message": "No items match your exact criteria. Here are all available items:",
-            "suggestions": suggestion_data,
+            "message": f"No exact match found. Here are other {search_term} options available:",
+            "results": suggestion_data,
         }
     
     # Sort candidates by price (lowest first)
@@ -111,8 +133,7 @@ def search_item_listings(
         })
     
     return {
-        "matched": True,
-        "message": f"Found {len(results)} item(s) matching your criteria, sorted from most suitable:",
+        "message": f"Found {len(results)} item(s) matching your criteria.",
         "results": results,
     }
 
@@ -189,10 +210,8 @@ item_agent = LlmAgent(
         "**JSON RESPONSE FORMAT:**\n"
         "{\n"
         "  \"type\": \"item_results\",\n"
-        "  \"matched\": <use exact value from tool: true if results found, false otherwise>,\n"
-        "  \"query\": { <your extracted parameters> },\n"
-        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>,\n"
-        "  \"message\": <COPY EXACTLY from tool response>\n"
+        "  \"message\": <COPY EXACTLY from tool response>,\n"
+        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>\n"
         "}\n\n"
         
         "**DELEGATION:**\n"

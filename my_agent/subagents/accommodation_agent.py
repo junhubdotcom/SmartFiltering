@@ -20,7 +20,7 @@ def search_accommodation_listings(
     location: Optional[str] = None,
     max_price_per_day: Optional[float] = None,
     property_type: Optional[str] = None,
-    num_guests: Optional[int] = None,
+    max_guests: Optional[int] = None,
     min_rating: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Search the backend API for accommodation listings.
@@ -34,7 +34,7 @@ def search_accommodation_listings(
         location: Desired city or neighbourhood.
         max_price_per_day: Maximum acceptable rental price per day.
         property_type: Type of property (e.g. Apartment, House).
-        num_guests: Minimum number of guests the place must accommodate.
+        max_guests: Minimum number of guests the place must accommodate.
         min_rating: Minimum acceptable average rating.
 
     Returns:
@@ -46,7 +46,6 @@ def search_accommodation_listings(
     
     if not all_listings:
         return {
-            "matched": False,
             "message": "No accommodation listings available. The backend may be unavailable or have no accommodation listings.",
             "results": [],
         }
@@ -60,31 +59,56 @@ def search_accommodation_listings(
         candidates = [l for l in candidates if float(l.get("basePrice", 0)) <= max_price_per_day]
     if property_type:
         candidates = [l for l in candidates if property_type.lower() in (l.get("propertyType") or "").lower()]
-    if num_guests:
-        candidates = [l for l in candidates if (l.get("numGuests") or 0) >= num_guests]
+    if max_guests:
+        candidates = [l for l in candidates if (l.get("maxGuests") or 0) >= max_guests]
     
     if not candidates:
-        # No exact matches – return all accommodation listings as suggestions
+        # No exact matches – try to find similar accommodations (same property type or location)
+        similar_accommodations = []
+        
+        # First, try to find accommodations of the same property type
+        if property_type:
+            similar_accommodations = [l for l in all_listings if property_type.lower() in (l.get("propertyType") or "").lower()]
+        
+        # If no type matches, try same location
+        if not similar_accommodations and location:
+            similar_accommodations = [l for l in all_listings if location.lower() in (l.get("address") or "").lower()]
+        
+        # If still no matches, return empty with appropriate message
+        if not similar_accommodations:
+            search_term = property_type or f"accommodation in {location}" if location else "requested accommodation"
+            return {
+                "message": f"No {search_term} listings available in our database.",
+                "results": [],
+            }
+        
+        # Sort similar accommodations by price
+        similar_accommodations_sorted = sorted(similar_accommodations, key=lambda l: float(l.get("basePrice", 0)))
+        
         suggestion_data = []
-        for s in all_listings:
-            tags = _generate_tags(s, all_listings)
+        for s in similar_accommodations_sorted:
+            tags = _generate_tags(s, similar_accommodations_sorted)
             suggestion_data.append({
                 "listingId": s.get("id"),
                 "title": s.get("title"),
                 "description": s.get("description"),
                 "address": s.get("address"),
                 "propertyType": s.get("propertyType"),
-                "numGuests": s.get("numGuests"),
+                "maxGuests": s.get("maxGuests"),
+                "bedCount": s.get("bedCount"),
+                "roomCount": s.get("roomCount"),
+                "bathroomCount": s.get("bathroomCount"),
                 "pricePerDay": float(s.get("basePrice", 0)),
                 "amenities": s.get("amenities", []),
                 "images": s.get("images", []),
                 "status": s.get("status"),
                 "tags": tags,
             })
+        
+        search_term = property_type or "accommodation"
         return {
-            "matched": False,
-            "message": "No accommodations match your exact criteria. Here are all available options:",
-            "suggestions": suggestion_data,
+            "message": f"No exact match found. Here are other {search_term} options available:",
+            "results": suggestion_data,
         }
     
     # Sort candidates by price (lowest first)
@@ -101,7 +125,10 @@ def search_accommodation_listings(
             "description": listing.get("description"),
             "address": listing.get("address"),
             "propertyType": listing.get("propertyType"),
-            "numGuests": listing.get("numGuests"),
+            "maxGuests": listing.get("maxGuests"),
+            "bedCount": listing.get("bedCount"),
+            "roomCount": listing.get("roomCount"),
+            "bathroomCount": listing.get("bathroomCount"),
             "pricePerDay": float(listing.get("basePrice", 0)),
             "amenities": listing.get("amenities", []),
             "images": listing.get("images", []),
@@ -110,8 +137,7 @@ def search_accommodation_listings(
         })
     
     return {
-        "matched": True,
-        "message": f"Found {len(results)} accommodation(s) matching your criteria, sorted from most suitable:",
+        "message": f"Found {len(results)} accommodation(s) matching your criteria.",
         "results": results,
     }
 
@@ -132,10 +158,10 @@ def _generate_tags(listing: Dict[str, Any], pool: List[Dict[str, Any]]) -> List[
         tags.append("Budget Friendly")
     
     # Capacity tags
-    num_guests = listing.get("numGuests") or 0
-    if num_guests >= 6:
+    max_guests = listing.get("maxGuests") or 0
+    if max_guests >= 6:
         tags.append("Great for Groups")
-    elif num_guests >= 4:
+    elif max_guests >= 4:
         tags.append("Family Friendly")
     
     # Property type tags
@@ -160,7 +186,7 @@ accommodation_agent = LlmAgent(
         "**CRITICAL: RETURN EXACT DATA FROM DATABASE**\n"
         "When you call the search tool, you MUST return the EXACT data from the tool response.\n"
         "DO NOT modify, reformat, or make up any values. Only the 'tags' field is generated.\n"
-        "All other fields (listingId, title, description, address, propertyType, numGuests, pricePerDay, images, status) \n"
+        "All other fields (listingId, title, description, address, propertyType, maxGuests, bedCount, roomCount, bathroomCount, pricePerDay, amenities, images, status) \n"
         "must be copied EXACTLY as returned by the search tool.\n\n"
         
         "**UNDERSTANDING COMPLEX REQUIREMENTS:**\n"
@@ -180,10 +206,8 @@ accommodation_agent = LlmAgent(
         "**JSON RESPONSE FORMAT:**\n"
         "{\n"
         "  \"type\": \"accommodation_results\",\n"
-        "  \"matched\": <use exact value from tool: true if results found, false otherwise>,\n"
-        "  \"query\": { <your extracted parameters> },\n"
-        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>,\n"
-        "  \"message\": <COPY EXACTLY from tool response>\n"
+        "  \"message\": <COPY EXACTLY from tool response>,\n"
+        "  \"results\": <COPY EXACTLY from tool response - do not modify any values>\n"
         "}\n\n"
         
         "**DELEGATION:**\n"
