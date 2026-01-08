@@ -55,6 +55,7 @@ def main():
         print(f"Sessions response: {sessions}")
 
     # Send a test query
+    # python3 -m my_agent.deployment.local
     print("\nSending test query...")
     test_message = (
         "Hello, can you find me a Luxury Chalet in Seri Kembangan?"

@@ -6,13 +6,15 @@ API client for fetching real listings from the iShareApi backend.
 This replaces the mock database with actual API calls.
 """
 
+import os
 import requests
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 
 # Backend API Configuration
-API_BASE_URL = "http://localhost:3000"
+# Use environment variable if set, otherwise default to localhost
+API_BASE_URL = os.getenv("ISHARE_API_URL", "http://localhost:3000")
 API_TIMEOUT = 10  # seconds
 
 
