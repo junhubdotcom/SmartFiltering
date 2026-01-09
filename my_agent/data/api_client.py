@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 
 # Backend API Configuration
-API_BASE_URL = "http://localhost:3000"
+ISHARE_BACKEND_URL = "http://localhost:3000"
 API_TIMEOUT = 10  # seconds
 
 
@@ -62,16 +62,27 @@ class ItemListing(Listing):
     model: Optional[str] = None
 
 
-def fetch_all_listings() -> Dict[str, Any]:
+def fetch_all_listings(owner_id: Optional[int] = None, listing_type: Optional[str] = None) -> Dict[str, Any]:
     """
-    Fetch all listings from the backend API.
+    Fetch listings from the backend API with optional filtering.
     
+    Args:
+        owner_id: Optional owner ID to filter by.
+        listing_type: Optional listing type (TRANSPORT, ACCOMMODATION, ITEM).
+        
     Returns:
         Dict with 'success', 'data' (list of listings), and 'error' if failed.
     """
     try:
+        params = {}
+        if owner_id is not None:
+            params["ownerId"] = owner_id
+        if listing_type is not None:
+            params["type"] = listing_type
+
         response = requests.get(
-            f"{API_BASE_URL}/listings",
+            f"{ISHARE_BACKEND_URL}/listings",
+            params=params,
             timeout=API_TIMEOUT
         )
         response.raise_for_status()
@@ -109,23 +120,7 @@ def fetch_listings_by_owner(owner_id: int) -> Dict[str, Any]:
     Returns:
         Dict with 'success', 'data' (list of listings), and 'error' if failed.
     """
-    try:
-        response = requests.get(
-            f"{API_BASE_URL}/listings",
-            params={"ownerId": owner_id},
-            timeout=API_TIMEOUT
-        )
-        response.raise_for_status()
-        return {
-            "success": True,
-            "data": response.json()
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "data": []
-        }
+    return fetch_all_listings(owner_id=owner_id)
 
 
 def fetch_listing_by_id(listing_id: str) -> Dict[str, Any]:
@@ -140,7 +135,7 @@ def fetch_listing_by_id(listing_id: str) -> Dict[str, Any]:
     """
     try:
         response = requests.get(
-            f"{API_BASE_URL}/listings/{listing_id}",
+            f"{ISHARE_BACKEND_URL}/listings/{listing_id}",
             timeout=API_TIMEOUT
         )
         response.raise_for_status()
@@ -163,18 +158,12 @@ def get_transport_listings() -> List[Dict[str, Any]]:
     Returns:
         List of transport listing dictionaries.
     """
-    result = fetch_all_listings()
+    result = fetch_all_listings(listing_type="TRANSPORT")
     if not result["success"]:
         print(f"⚠️ API Error: {result['error']}")
         return []
     
-    # Filter for TRANSPORT type
-    listings = result["data"]
-    transport_listings = [
-        l for l in listings 
-        if isinstance(l, dict) and l.get("type") == "TRANSPORT"
-    ]
-    return transport_listings
+    return result["data"]
 
 
 def get_accommodation_listings() -> List[Dict[str, Any]]:
@@ -184,18 +173,12 @@ def get_accommodation_listings() -> List[Dict[str, Any]]:
     Returns:
         List of accommodation listing dictionaries.
     """
-    result = fetch_all_listings()
+    result = fetch_all_listings(listing_type="ACCOMMODATION")
     if not result["success"]:
         print(f"⚠️ API Error: {result['error']}")
         return []
     
-    # Filter for ACCOMMODATION type
-    listings = result["data"]
-    accommodation_listings = [
-        l for l in listings 
-        if isinstance(l, dict) and l.get("type") == "ACCOMMODATION"
-    ]
-    return accommodation_listings
+    return result["data"]
 
 
 def get_item_listings() -> List[Dict[str, Any]]:
@@ -205,15 +188,9 @@ def get_item_listings() -> List[Dict[str, Any]]:
     Returns:
         List of item listing dictionaries.
     """
-    result = fetch_all_listings()
+    result = fetch_all_listings(listing_type="ITEM")
     if not result["success"]:
         print(f"⚠️ API Error: {result['error']}")
         return []
     
-    # Filter for ITEM type
-    listings = result["data"]
-    item_listings = [
-        l for l in listings 
-        if isinstance(l, dict) and l.get("type") == "ITEM"
-    ]
-    return item_listings
+    return result["data"]
