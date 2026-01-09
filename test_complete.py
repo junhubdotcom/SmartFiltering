@@ -25,6 +25,7 @@ from my_agent.data.api_client import (
 from my_agent.subagents.transport_agent import search_transport_listings
 from my_agent.subagents.item_agent import search_item_listings
 from my_agent.subagents.accommodation_agent import search_accommodation_listings
+from my_agent.agent import search_multiple_categories
 
 
 # ============================================================================
@@ -425,6 +426,85 @@ def test_edge_cases():
 
 
 # ============================================================================
+# TEST 8: MULTI-CATEGORY SEARCH
+# ============================================================================
+
+def test_multi_category_search():
+    """
+    Test 8: Test multi-category search functionality.
+    
+    Scenarios:
+    - Search transport + accommodation
+    - Search all three categories
+    - Search with shared location filter
+    """
+    print_header("TEST 8: Multi-Category Search", "🔀")
+    
+    # Test 8.1: Search transport and accommodation
+    print("\n📋 Test 8.1: Search transport + accommodation")
+    result = search_multiple_categories(
+        search_transport=True,
+        search_accommodation=True,
+        location="Seri Kembangan"
+    )
+    print(f"   Message: {result.get('message')}")
+    if "categories" in result:
+        for cat_key, cat_data in result["categories"].items():
+            print(f"   {cat_data.get('category_name')}: {len(cat_data.get('results', []))} results")
+    
+    # Test 8.2: Search all three categories
+    print("\n📋 Test 8.2: Search all three categories")
+    result = search_multiple_categories(
+        search_transport=True,
+        search_accommodation=True,
+        search_items=True,
+    )
+    print(f"   Message: {result.get('message')}")
+    if "categories" in result:
+        for cat_key, cat_data in result["categories"].items():
+            print(f"   {cat_data.get('category_name')}: {len(cat_data.get('results', []))} results")
+    
+    # Test 8.3: Search with budget filter
+    print("\n📋 Test 8.3: Search all categories with budget (RM200/day)")
+    result = search_multiple_categories(
+        search_transport=True,
+        search_accommodation=True,
+        search_items=True,
+        max_price_per_day=200
+    )
+    print(f"   Message: {result.get('message')}")
+    if "categories" in result:
+        for cat_key, cat_data in result["categories"].items():
+            print(f"   {cat_data.get('category_name')}: {len(cat_data.get('results', []))} results")
+    
+    # Test 8.4: Full JSON response for multi-category
+    print("\n📋 Test 8.4: Sample multi-category JSON response")
+    result = search_multiple_categories(
+        search_transport=True,
+        search_accommodation=True,
+        location="Kuala Lumpur",
+        max_price_per_day=300
+    )
+    # Show first result from each category
+    if "categories" in result:
+        sample = {
+            "type": result.get("type"),
+            "message": result.get("message"),
+            "categories": {}
+        }
+        for cat_key, cat_data in result["categories"].items():
+            sample["categories"][cat_key] = {
+                "category_name": cat_data.get("category_name"),
+                "message": cat_data.get("message"),
+                "results": cat_data.get("results", [])[:1]  # First result only
+            }
+        print_json(sample)
+    
+    print("\n✅ Multi-category search tests completed")
+    return True
+
+
+# ============================================================================
 # MAIN TEST RUNNER
 # ============================================================================
 
@@ -445,6 +525,7 @@ def main():
         ("JSON Response Format", test_json_response_format),
         ("Database Fields", test_database_fields),
         ("Edge Cases", test_edge_cases),
+        ("Multi-Category Search", test_multi_category_search),
     ]
     
     results = []
