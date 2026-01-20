@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 # Backend API Configuration
 # Use environment variable if set, otherwise default to localhost
-API_BASE_URL = os.getenv("ISHARE_API_URL", "http://localhost:3000")
+ISHARE_BACKEND_URL = os.getenv("ISHARE_API_URL", "http://localhost:3000")
 API_TIMEOUT = 10  # seconds
 
 
