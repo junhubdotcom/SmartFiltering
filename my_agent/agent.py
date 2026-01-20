@@ -438,4 +438,3 @@ root_agent = LlmAgent(
     tools=[search_multiple_categories, search_with_combined_budget],
     sub_agents=[transport_agent, accommodation_agent, item_agent],
 )
-
